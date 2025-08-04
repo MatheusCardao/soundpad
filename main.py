@@ -1,22 +1,57 @@
-import keyboard
-import pygame
+import sys
 import json
 import os
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QSlider, QLabel, QComboBox
+from PyQt5.QtCore import Qt
+from sound_engine import SoundEngine
 
-pygame.mixer.init()
-
+# Carregar sons do JSON
 with open("sounds.json", "r") as f:
     sounds = json.load(f)
 
-def play_sound(path):
-    if os.path.exists(path):
-        pygame.mixer.music.load(path)
-        pygame.mixer.music.play()
-    else:
-        print(f"Arquivo não encontrado: {path}")
+class SoundpadApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Soundpad Simples")
+        self.setGeometry(200, 200, 300, 400)
 
-for key, path in sounds.items():
-    keyboard.add_hotkey(key, lambda p=path: play_sound(p))
+        # Engine de áudio
+        self.engine = SoundEngine()
 
-print("🎵 Soundpad simples rodando! Pressione ESC para sair.")
-keyboard.wait("esc")
+        layout = QVBoxLayout()
+
+        # Dispositivos
+        self.device_box = QComboBox()
+        self.devices = self.engine.list_devices()
+        self.device_box.addItems(self.devices)
+        self.device_box.currentTextChanged.connect(self.change_device)
+        layout.addWidget(QLabel("Dispositivo de saída:"))
+        layout.addWidget(self.device_box)
+
+        # Slider volume
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(50)
+        self.volume_slider.valueChanged.connect(self.change_volume)
+        layout.addWidget(QLabel("Volume:"))
+        layout.addWidget(self.volume_slider)
+
+        # Botões de sons
+        for key, path in sounds.items():
+            btn = QPushButton(f"{key.upper()} - {os.path.basename(path)}")
+            btn.clicked.connect(lambda checked, p=path: self.engine.play(p))
+            layout.addWidget(btn)
+
+        self.setLayout(layout)
+
+    def change_device(self, device_name):
+        self.engine.set_device(device_name)
+
+    def change_volume(self, value):
+        self.engine.set_volume(value / 100.0)
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = SoundpadApp()
+    window.show()
+    sys.exit(app.exec_())
