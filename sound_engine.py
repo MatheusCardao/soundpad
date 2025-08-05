@@ -1,6 +1,12 @@
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
+import sys, os
+
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class SoundEngine:
     def __init__(self, mic_device=None, volume=0.5):
@@ -50,7 +56,8 @@ class SoundEngine:
         self.volume = max(0.0, min(1.0, volume))
 
     def preload_sound(self, key, path):
-        data, fs = sf.read(path, dtype='float32')
+        full_path = resource_path(path)
+        data, fs = sf.read(full_path, dtype='float32')
         if len(data.shape) == 1:
             data = np.stack([data, data], axis=1)
         self.preloaded_sounds[key] = (data, fs)
@@ -66,6 +73,7 @@ class SoundEngine:
     def stop(self):
         self.is_playing = False
         self.sound_pos = 0
+        sd.stop()  # Interrompe qualquer reprodução imediatamente
 
     def _mic_callback(self, indata, frames, time, status):
         if status:

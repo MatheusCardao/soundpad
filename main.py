@@ -11,6 +11,7 @@ from sound_engine import SoundEngine
 import numpy as np
 import sounddevice as sd
 import threading, time
+from PyQt5.QtWidgets import QHBoxLayout
 
 SETTINGS_FILE = "settings.json"
 SOUNDS_FILE = "sounds.json"
@@ -40,6 +41,15 @@ def save_settings(settings):
 def save_sounds():
     with open(SOUNDS_FILE, "w") as f:
         json.dump(sounds, f)
+
+def resource_path(relative_path):
+    """Corrige os caminhos no PyInstaller"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+SETTINGS_FILE = resource_path("settings.json")
+SOUNDS_FILE = resource_path("sounds.json")
 
 class SoundpadApp(QWidget):
     def __init__(self):
@@ -164,7 +174,7 @@ class SoundpadApp(QWidget):
             self.sound_layout.itemAt(i).widget().deleteLater()
 
         for key, path in sounds.items():
-            self.engine.preload_sound(key, path)
+            self.engine.preload_sound(key, resource_path(path))
             btn = QPushButton(f"{key.upper()} - {os.path.basename(path)}")
             btn.clicked.connect(lambda checked, k=key: self.play_with_ptt(k))
             self.sound_layout.addWidget(btn)
