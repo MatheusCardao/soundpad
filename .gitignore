@@ -1,6 +1,5 @@
-.build
-.dist
-.main
-.SoundpadPro
+.build/
+.dist/
+._pycache_/
 .main.spec
 .SoundpadPro.spec
