@@ -170,14 +170,27 @@ class SoundpadApp(QWidget):
         save_settings(self.settings)
 
     def load_sounds(self):
+        # Limpa layout atual
         for i in reversed(range(self.sound_layout.count())):
             self.sound_layout.itemAt(i).widget().deleteLater()
 
         for key, path in sounds.items():
             self.engine.preload_sound(key, resource_path(path))
-            btn = QPushButton(f"{key.upper()} - {os.path.basename(path)}")
-            btn.clicked.connect(lambda checked, k=key: self.play_with_ptt(k))
-            self.sound_layout.addWidget(btn)
+
+            row = QHBoxLayout()
+            play_btn = QPushButton(f"{key.upper()} - {os.path.basename(path)}")
+            play_btn.clicked.connect(lambda checked, k=key: self.play_with_ptt(k))
+
+            remove_btn = QPushButton("❌")
+            remove_btn.setFixedWidth(40)
+            remove_btn.clicked.connect(lambda checked, k=key: self.remove_sound(k))
+
+            row.addWidget(play_btn)
+            row.addWidget(remove_btn)
+
+            container = QWidget()
+            container.setLayout(row)
+            self.sound_layout.addWidget(container)
             keyboard.add_hotkey(key.lower(), lambda k=key: self.play_with_ptt(k))
 
     def play_with_ptt(self, key):
@@ -198,6 +211,17 @@ class SoundpadApp(QWidget):
                 sounds[key] = file_path
                 save_sounds()
                 self.load_sounds()
+
+    def remove_sound(self, key):
+        reply = QMessageBox.question(self, "Remover Som",
+                                    f"Tem certeza que deseja remover '{key}'?",
+                                    QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if key in sounds:
+                del sounds[key]
+                save_sounds()
+                self.load_sounds()
+
 
     def stop_sound(self):
         self.engine.stop()
