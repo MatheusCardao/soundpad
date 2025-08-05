@@ -4,32 +4,48 @@ import os
 import keyboard
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
-    QSlider, QLabel, QComboBox, QHBoxLayout, QScrollArea, QFrame
+    QSlider, QLabel, QComboBox, QScrollArea, QFileDialog, QInputDialog, QMessageBox, QProgressBar
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtCore import Qt, QSize, QTimer
 from sound_engine import SoundEngine
+import numpy as np
+import sounddevice as sd
+import threading, time
 
 SETTINGS_FILE = "settings.json"
+SOUNDS_FILE = "sounds.json"
 
-with open("sounds.json", "r") as f:
+if not os.path.exists(SOUNDS_FILE):
+    with open(SOUNDS_FILE, "w") as f:
+        json.dump({}, f)
+
+with open(SOUNDS_FILE, "r") as f:
     sounds = json.load(f)
 
 def load_settings():
+    default_settings = {"mic_device": None, "volume": 0.5}
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r") as f:
-            return json.load(f)
-    return {"device": None, "volume": 0.5}
+            data = json.load(f)
+            for key in default_settings:
+                if key not in data:
+                    data[key] = default_settings[key]
+            return data
+    return default_settings
 
 def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f)
 
+def save_sounds():
+    with open(SOUNDS_FILE, "w") as f:
+        json.dump(sounds, f)
+
 class SoundpadApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Soundpad Pro")
-        self.setGeometry(200, 200, 500, 600)
+        self.setWindowTitle("Soundpad Pro - VB-Cable")
+        self.setGeometry(200, 200, 500, 650)
 
         self.engine = SoundEngine()
         self.settings = load_settings()
@@ -45,87 +61,97 @@ class SoundpadApp(QWidget):
 
         layout = QVBoxLayout()
 
-        # Dispositivo
-        self.device_box = QComboBox()
-        self.devices = self.engine.list_devices()
-        self.device_box.addItems(self.devices)
-        if self.settings["device"] in self.devices:
-            self.device_box.setCurrentText(self.settings["device"])
-            self.engine.set_device(self.settings["device"])
-        self.device_box.currentTextChanged.connect(self.change_device)
-        layout.addWidget(QLabel("Dispositivo de saída:"))
-        layout.addWidget(self.device_box)
+        # ComboBox para microfone
+        self.mic_box = QComboBox()
+        self.mics = self.engine.list_input_devices()
+        self.mic_box.addItems(self.mics)
+        if self.settings["mic_device"] in self.mics:
+            self.mic_box.setCurrentText(self.settings["mic_device"])
+            try:
+                self.engine.set_mic_device(self.settings["mic_device"])
+            except ValueError:
+                QMessageBox.warning(self, "Erro", "Microfone salvo não encontrado. Selecione novamente.")
+        self.mic_box.currentTextChanged.connect(self.change_mic_device)
+        layout.addWidget(QLabel("Seu microfone:"))
+        layout.addWidget(self.mic_box)
 
         # Volume
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(int(self.settings["volume"] * 100))
         self.volume_slider.valueChanged.connect(self.change_volume)
-        layout.addWidget(QLabel("Volume:"))
+        layout.addWidget(QLabel("Volume do som:"))
         layout.addWidget(self.volume_slider)
         self.engine.set_volume(self.settings["volume"])
 
+        # Botão para adicionar sons
+        add_sound_btn = QPushButton("+ Adicionar Som")
+        add_sound_btn.clicked.connect(self.add_sound)
+        layout.addWidget(add_sound_btn)
+
         # Área rolável para sons
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        sound_list = QWidget()
-        sound_layout = QVBoxLayout()
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.sound_list = QWidget()
+        self.sound_layout = QVBoxLayout()
+        self.sound_list.setLayout(self.sound_layout)
+        self.scroll.setWidget(self.sound_list)
+        layout.addWidget(self.scroll)
 
-        for key, path in sounds.items():
-            btn = QPushButton(f"{key.upper()} - {os.path.basename(path)}")
-            btn.clicked.connect(lambda checked, p=path: self.engine.play(p))
-            sound_layout.addWidget(btn)
-            keyboard.add_hotkey(key.lower(), lambda p=path: self.engine.play(p))
+        self.load_sounds()
 
-        sound_list.setLayout(sound_layout)
-        scroll.setWidget(sound_list)
-        layout.addWidget(scroll)
+        # Botão Stop
+        self.stop_btn = QPushButton("Parar (F12)")
+        self.stop_btn.setIconSize(QSize(32, 32))
+        self.stop_btn.clicked.connect(self.stop_sound)
+        layout.addWidget(self.stop_btn)
+        keyboard.add_hotkey("f12", self.stop_sound)
 
-        # Controles de reprodução
-        control_layout = QHBoxLayout()
-        self.pause_btn = QPushButton()
-        self.pause_btn.setIcon(QIcon("icons/pause.svg"))
-        self.pause_btn.clicked.connect(self.engine.pause)
-        control_layout.addWidget(self.pause_btn)
+        # Botão de teste
+        test_btn = QPushButton("🔊 Testar (Beep)")
+        test_btn.clicked.connect(self.test_beep)
+        layout.addWidget(test_btn)
 
-        self.resume_btn = QPushButton()
-        self.resume_btn.setIcon(QIcon("icons/play.svg"))
-        self.resume_btn.clicked.connect(self.engine.resume)
-        control_layout.addWidget(self.resume_btn)
+        # Botão para alternar modos
+        self.mode_btn = QPushButton("Modo: Mixagem")
+        self.mode_btn.clicked.connect(self.toggle_mode)
+        layout.addWidget(self.mode_btn)
 
-        self.stop_btn = QPushButton()
-        self.stop_btn.setIcon(QIcon("icons/stop.svg"))
-        self.stop_btn.clicked.connect(self.engine.stop)
-        control_layout.addWidget(self.stop_btn)
+        # VU meter
+        self.vu_meter = QProgressBar()
+        self.vu_meter.setRange(0, 100)
+        self.vu_meter.setTextVisible(False)
+        self.vu_meter.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #333;
+                background: #1e1e1e;
+                height: 12px;
+            }
+            QProgressBar::chunk {
+                background: #00ff00;
+            }
+        """)
+        layout.addWidget(QLabel("Nível de áudio:"))
+        layout.addWidget(self.vu_meter)
 
-        layout.addLayout(control_layout)
-
-        # Barra de progresso
-        self.progress_slider = QSlider(Qt.Horizontal)
-        self.progress_slider.setRange(0, 0)
-        self.progress_slider.sliderReleased.connect(self.seek_audio)
-        layout.addWidget(self.progress_slider)
-
-        # Labels de tempo
-        time_layout = QHBoxLayout()
-        self.current_time_label = QLabel("0:00")
-        self.total_time_label = QLabel("0:00")
-        time_layout.addWidget(self.current_time_label)
-        time_layout.addStretch()
-        time_layout.addWidget(self.total_time_label)
-        layout.addLayout(time_layout)
+        # Timer para atualizar VU
+        self.vu_timer = QTimer()
+        self.vu_timer.timeout.connect(self.update_vu)
+        self.vu_timer.start(50)
 
         self.setLayout(layout)
+        try:
+            self.engine.start_stream()
+        except Exception as e:
+            QMessageBox.critical(self, "Erro de Áudio", f"Não foi possível iniciar o áudio:\n{str(e)}")
 
-        # Atualização da barra de progresso
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_progress)
-        self.timer.start(200)
-
-    def change_device(self, device_name):
-        self.engine.set_device(device_name)
-        self.settings["device"] = device_name
-        save_settings(self.settings)
+    def change_mic_device(self, device_name):
+        try:
+            self.engine.set_mic_device(device_name)
+            self.settings["mic_device"] = device_name
+            save_settings(self.settings)
+        except ValueError:
+            QMessageBox.warning(self, "Erro", f"Não foi possível selecionar o microfone: {device_name}")
 
     def change_volume(self, value):
         vol = value / 100.0
@@ -133,21 +159,55 @@ class SoundpadApp(QWidget):
         self.settings["volume"] = vol
         save_settings(self.settings)
 
-    def update_progress(self):
-        duration = self.engine.get_duration()
-        position = self.engine.get_position()
-        if duration > 0:
-            self.progress_slider.setRange(0, int(duration))
-            self.progress_slider.setValue(int(position))
-            self.current_time_label.setText(self.format_time(position))
-            self.total_time_label.setText(self.format_time(duration))
+    def load_sounds(self):
+        for i in reversed(range(self.sound_layout.count())):
+            self.sound_layout.itemAt(i).widget().deleteLater()
 
-    def seek_audio(self):
-        self.engine.seek(self.progress_slider.value())
+        for key, path in sounds.items():
+            self.engine.preload_sound(key, path)
+            btn = QPushButton(f"{key.upper()} - {os.path.basename(path)}")
+            btn.clicked.connect(lambda checked, k=key: self.play_with_ptt(k))
+            self.sound_layout.addWidget(btn)
+            keyboard.add_hotkey(key.lower(), lambda k=key: self.play_with_ptt(k))
 
-    def format_time(self, seconds):
-        m, s = divmod(int(seconds), 60)
-        return f"{m}:{s:02d}"
+    def play_with_ptt(self, key):
+        self.engine.ptt_active = True
+        self.engine.play(key)
+
+        def disable_after():
+            duration = self.engine.get_duration()
+            time.sleep(duration + 0.2)
+            self.engine.ptt_active = False
+        threading.Thread(target=disable_after, daemon=True).start()
+
+    def add_sound(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Escolher som", "", "Áudio (*.mp3 *.wav)")
+        if file_path:
+            key, ok = QInputDialog.getText(self, "Atalho", "Digite a tecla (ex: F1):")
+            if ok and key:
+                sounds[key] = file_path
+                save_sounds()
+                self.load_sounds()
+
+    def stop_sound(self):
+        self.engine.stop()
+        self.engine.ptt_active = False
+
+    def test_beep(self):
+        fs = 44100
+        t = np.linspace(0, 0.5, int(fs*0.5), False)
+        beep = 0.2 * np.sin(2 * np.pi * 440 * t)
+        stereo_beep = np.stack([beep, beep], axis=1)
+        sd.play(stereo_beep, fs, device=self.engine.output_device)
+
+    def toggle_mode(self):
+        self.engine.pure_mode = not self.engine.pure_mode
+        mode_name = "Qualidade Pura" if self.engine.pure_mode else "Mixagem"
+        self.mode_btn.setText(f"Modo: {mode_name}")
+
+    def update_vu(self):
+        level = self.engine.get_current_level()
+        self.vu_meter.setValue(int(level * 100))
 
     def closeEvent(self, event):
         self.engine.stop()
